@@ -2123,6 +2123,8 @@ document.addEventListener('click',e=>{const t=e.target.closest&&e.target.closest
   ask(tx('bkConfirm'),tx('bkGo'),()=>bkRun(async()=>{bkSay(tx('bkReading'));try{return await adm('readSite',{from:from});}catch(err){bkSay(tx('bkReadErr'),true);toast(tx('bkReadErr'));return null;}}));});
 document.addEventListener('change',e=>{const t=e.target;if(t.id!=='zbFile'||!t.files||!t.files[0])return;const f=t.files[0];t.value='';
   ask(tx('bkConfirm'),tx('bkGo'),()=>bkRun(async()=>{try{const d=JSON.parse(await f.text());if(!d||typeof d.content!=='object'){toast(tx('bkBad'));return null;}return d;}catch(err){toast(tx('bkBad'));return null;}}));});
+/* ---------- v17: visitors read a 1-minute edge copy of the site data; the studio panel always reads fresh ---------- */
+{const _api17=api;api=function(path,opt){if(path==='state'&&S.key)path='state?fresh='+Date.now();return _api17(path,opt);};}
 S.mine=[];renderAll();
 async function loadState(){try{const s=await api('state');S.live=!!s.live;S.bot=s.bot||null;
   if(s.content)S.content=Object.assign(clone(DEF.content),s.content);if(Array.isArray(s.artists))S.artists=s.artists;if(Array.isArray(s.works))S.works=s.works;S.flash=Array.isArray(s.flash)?s.flash:[];S.slots=s.slots||[];
