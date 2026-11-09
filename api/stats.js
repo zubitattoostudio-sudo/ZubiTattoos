@@ -1,7 +1,7 @@
 // Anonymous, cookieless site statistics and click heatmap.
 // POST (beacon, no auth): aggregated counters only, no IP, no IDs, nothing per person.
 // POST with x-admin-key: read one month for the studio panel.
-import { wrap, send, HttpError, isAdmin, hasRedis, rp, nowWarsaw } from './_lib.js';
+import { wrap, send, HttpError, isAdmin, hasRedis, r, rp, nowWarsaw } from './_lib.js';
 
 const SECTIONS = ['nav', 'hero', 'work', 'prices', 'artists', 'faq', 'visit', 'bar'];
 const AREAS = [...SECTIONS, 'menu', 'sheet'];
@@ -45,6 +45,24 @@ function ingest(q) {
 
 const toObj = a => { const o = {}; if (Array.isArray(a)) for (let i = 0; i < a.length; i += 2) o[a[i]] = Number(a[i + 1]); else if (a && typeof a === 'object') for (const k in a) o[k] = Number(a[k]); return o; };
 
+
+/* Each visit is queued as one list entry (one database command) instead of 20-40 counter updates.
+   The queue is folded into the monthly counters when the panel reads stats, or when it gets long. */
+const Q = P + 'q', FOLD_AT = 1500;
+async function fold() {
+  const tmp = Q + ':' + Date.now() + ':' + Math.random().toString(36).slice(2, 7);
+  try { await r('RENAME', Q, tmp); } catch { return; } // nothing queued
+  const items = (await r('LRANGE', tmp, 0, -1)) || []; const agg = new Map();
+  for (const it of items) {
+    let list; try { list = JSON.parse(it); } catch { continue; }
+    if (!Array.isArray(list)) continue;
+    for (const c of list) { if (!Array.isArray(c) || c.length !== 3) continue; const id = c[0] + '\u0000' + c[1]; agg.set(id, (agg.get(id) || 0) + (Number(c[2]) || 0)); }
+  }
+  const cmds = [...agg].map(([id, n]) => { const [k, f] = id.split('\u0000'); return ['HINCRBY', k, f, n]; });
+  for (let i = 0; i < cmds.length; i += 400) await rp(cmds.slice(i, i + 400));
+  await r('DEL', tmp);
+}
+
 async function month(m) {
   const base = ['v', 'sec', 'el', 'rage'];
   const hm = []; DEV.forEach(d => SECTIONS.forEach(s => hm.push([d, s])));
@@ -61,13 +79,15 @@ export default wrap(async (req, res) => {
     if (!hasRedis()) throw new HttpError(503, 'no_redis');
     const q = await readBody(req); const now = nowWarsaw().slice(0, 7);
     const m = /^\d{4}-\d{2}$/.test(String(q.month || '')) ? q.month : now;
+    try { await fold(); } catch (e) { console.error('fold', e.message); }
     return send(res, 200, { ...(await month(m)), now });
   }
   // public beacon: never fail loudly, never store anything that identifies a person
   res.statusCode = 204;
   try {
     if (!hasRedis() || BOTS.test(String(req.headers['user-agent'] || ''))) return res.end();
-    const cmds = ingest(await readBody(req)); if (cmds.length) await rp(cmds.slice(0, 120));
+    const cmds = ingest(await readBody(req)).slice(0, 120);
+    if (cmds.length) { const n = await r('RPUSH', Q, JSON.stringify(cmds.map(c => [c[1], c[2], c[3]]))); if (n >= FOLD_AT) await fold(); }
   } catch (e) { console.error('stats', e.message); }
   res.end();
 });
